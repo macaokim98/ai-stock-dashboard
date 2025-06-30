@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Header } from './components/Layout/Header';
 import { MarketIndices } from './components/MarketOverview/MarketIndices';
 import { StockChart } from './components/StockChart/StockChart';
@@ -6,7 +6,6 @@ import { Watchlist } from './components/Watchlist/Watchlist';
 import { Portfolio } from './components/Portfolio/Portfolio';
 import { AIAnalysis } from './components/AIAnalysis/AIAnalysis';
 import { useStockStore } from './store/stockStore';
-import { useMarketIndices, useDailyData } from './hooks/useStockData';
 import { useAutoRefresh } from './hooks/useAutoRefresh';
 import type { MarketIndex, StockChart as StockChartData, WatchlistItem, Portfolio as PortfolioType } from './types/stock';
 import './App.css';
@@ -75,9 +74,34 @@ function App() {
     setPortfolio 
   } = useStockStore();
 
-  // Use React Query hooks for data fetching
-  const { data: marketIndices, isLoading: marketLoading, error: marketError } = useMarketIndices();
-  const { data: chartData, isLoading: chartLoading, error: chartError } = useDailyData('AAPL');
+  // Use direct mock data for immediate loading (no network dependencies)
+  const [marketIndices, setMarketIndices] = useState<MarketIndex[]>(mockMarketIndices);
+  const [chartData] = useState<StockChartData[]>(mockChartData);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    // Simulate data loading with realistic delay
+    const timer = setTimeout(() => {
+      // Generate enhanced mock market indices
+      const enhancedMarketIndices = [
+        { name: 'S&P 500', value: 4567.12 + (Math.random() - 0.5) * 100, change: (Math.random() - 0.5) * 50, changePercent: (Math.random() - 0.5) * 2 },
+        { name: 'NASDAQ', value: 14234.56 + (Math.random() - 0.5) * 500, change: (Math.random() - 0.5) * 200, changePercent: (Math.random() - 0.5) * 2 },
+        { name: 'Dow Jones', value: 34567.89 + (Math.random() - 0.5) * 300, change: (Math.random() - 0.5) * 150, changePercent: (Math.random() - 0.5) * 1.5 },
+        { name: 'Russell 2000', value: 2000.45 + (Math.random() - 0.5) * 50, change: (Math.random() - 0.5) * 25, changePercent: (Math.random() - 0.5) * 2 }
+      ];
+      
+      setMarketIndices(enhancedMarketIndices);
+      setIsLoading(false);
+      console.log('✅ Mock data loaded successfully');
+    }, 800); // Realistic loading delay
+    
+    return () => clearTimeout(timer);
+  }, []);
+
+  const marketLoading = isLoading;
+  const chartLoading = isLoading;
+  const marketError = null;
+  const chartError = null;
   
   // Auto-refresh functionality
   useAutoRefresh();
@@ -126,14 +150,7 @@ function App() {
           <div className="dashboard-grid">
             <MarketIndices indices={marketIndices || mockMarketIndices} />
             <StockChart 
-              data={chartData ? chartData.map(item => ({
-                timestamp: item.timestamp,
-                open: item.price,
-                high: item.price,
-                low: item.price,
-                close: item.price,
-                volume: item.volume || 0
-              })) : mockChartData} 
+              data={chartData || mockChartData} 
               symbol="AAPL" 
             />
           </div>
