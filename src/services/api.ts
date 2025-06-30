@@ -14,34 +14,40 @@ api.interceptors.response.use(
 );
 
 export class StockAPI {
-  // Free alternative API endpoints (no CORS issues)
-  private static readonly FINNHUB_BASE = 'https://finnhub.io/api/v1';
-  private static readonly FINNHUB_API_KEY = 'demo'; // Using demo key for testing
+  // Alpha Vantage API with CORS proxy
+  private static readonly ALPHA_VANTAGE_BASE = 'https://api.allorigins.win/get?url=';
+  private static readonly ALPHA_VANTAGE_API_KEY = 'ZXQ9GMI1ABII26WQ'; // Real API key
+  private static readonly REAL_API_BASE = 'https://www.alphavantage.co/query';
   
   static async getQuote(symbol: string): Promise<StockData> {
     try {
-      // Using Finnhub API as it has better CORS support
-      const response = await api.get(`${this.FINNHUB_BASE}/quote?symbol=${symbol}&token=${this.FINNHUB_API_KEY}`);
+      // Try Alpha Vantage API first with CORS proxy
+      const alphaVantageUrl = `${this.REAL_API_BASE}?function=GLOBAL_QUOTE&symbol=${symbol}&apikey=${this.ALPHA_VANTAGE_API_KEY}`;
+      const proxyUrl = `${this.ALPHA_VANTAGE_BASE}${encodeURIComponent(alphaVantageUrl)}`;
       
-      const data = response.data;
-      if (!data || data.c === undefined) {
+      const response = await api.get(proxyUrl);
+      const data = JSON.parse(response.data.contents);
+      
+      const quote = data['Global Quote'];
+      if (!quote || !quote['05. price']) {
         throw new Error(`No data found for symbol: ${symbol}`);
       }
 
-      const price = data.c || 0; // current price
-      const change = data.d || 0; // change
-      const changePercent = data.dp || 0; // change percent
-      const high = data.h || 0; // high
-      const low = data.l || 0; // low  
-      const open = data.o || 0; // open
-      const previousClose = data.pc || 0; // previous close
+      const price = parseFloat(quote['05. price']) || 0;
+      const change = parseFloat(quote['09. change']) || 0;
+      const changePercent = parseFloat(quote['10. change percent'].replace('%', '')) || 0;
+      const high = parseFloat(quote['03. high']) || 0;
+      const low = parseFloat(quote['04. low']) || 0;
+      const open = parseFloat(quote['02. open']) || 0;
+      const previousClose = parseFloat(quote['08. previous close']) || 0;
+      const volume = parseInt(quote['06. volume']) || 0;
 
       return {
         symbol: symbol,
         price: price,
         change: change,
         changePercent: changePercent,
-        volume: 0, // Not available in free tier
+        volume: volume,
         high: high,
         low: low,
         open: open,
@@ -50,9 +56,40 @@ export class StockAPI {
       };
     } catch (error) {
       console.error(`Error fetching quote for ${symbol}:`, error);
-      // Fallback to mock data if API fails
-      return this.getMockData(symbol);
+      
+      // Try alternative free API as fallback
+      try {
+        return await this.getQuoteFromFinhub(symbol);
+      } catch (fallbackError) {
+        console.error(`Fallback API also failed for ${symbol}:`, fallbackError);
+        // Return mock data as last resort
+        return this.getMockData(symbol);
+      }
     }
+  }
+
+  // Fallback to Finnhub API
+  private static async getQuoteFromFinhub(symbol: string): Promise<StockData> {
+    const finnhubUrl = `https://finnhub.io/api/v1/quote?symbol=${symbol}&token=demo`;
+    const response = await api.get(finnhubUrl);
+    
+    const data = response.data;
+    if (!data || data.c === undefined) {
+      throw new Error(`No data found for symbol: ${symbol}`);
+    }
+
+    return {
+      symbol: symbol,
+      price: data.c || 0,
+      change: data.d || 0,
+      changePercent: data.dp || 0,
+      volume: 0,
+      high: data.h || 0,
+      low: data.l || 0,
+      open: data.o || 0,
+      previousClose: data.pc || 0,
+      timestamp: new Date().toISOString().split('T')[0],
+    };
   }
 
   // Fallback mock data generator
@@ -77,12 +114,67 @@ export class StockAPI {
 
   static async getHistoricalData(symbol: string, period: string = '1mo'): Promise<ChartData[]> {
     try {
-      // Generate mock historical data as fallback
-      return this.getMockHistoricalData(symbol, period);
+      // Try Alpha Vantage API for daily data
+      const alphaVantageUrl = `${this.REAL_API_BASE}?function=TIME_SERIES_DAILY&symbol=${symbol}&apikey=${this.ALPHA_VANTAGE_API_KEY}`;
+      const proxyUrl = `${this.ALPHA_VANTAGE_BASE}${encodeURIComponent(alphaVantageUrl)}`;
+      
+      const response = await api.get(proxyUrl);
+      const data = JSON.parse(response.data.contents);
+      
+      const timeSeries = data['Time Series (Daily)'];
+      if (!timeSeries) {
+        throw new Error(`No historical data found for symbol: ${symbol}`);
+      }
+
+      // Convert to our format and limit by period
+      const days = period === '1d' ? 1 : period === '5d' ? 5 : period === '1mo' ? 30 : 90;
+      const entries = Object.entries(timeSeries)
+        .slice(0, days)
+        .map(([date, values]: [string, any]) => ({
+          timestamp: date,
+          price: parseFloat(values['4. close']) || 0,
+          volume: parseInt(values['5. volume']) || 0,
+        }))
+        .reverse(); // Reverse to get chronological order
+
+      return entries;
     } catch (error) {
       console.error(`Error fetching historical data for ${symbol}:`, error);
-      return this.getMockHistoricalData(symbol, period);
+      
+      // Try alternative free API
+      try {
+        return await this.getHistoricalFromFinhub(symbol, period);
+      } catch (fallbackError) {
+        console.error(`Fallback historical data also failed for ${symbol}:`, fallbackError);
+        return this.getMockHistoricalData(symbol, period);
+      }
     }
+  }
+
+  // Fallback historical data from free APIs
+  private static async getHistoricalFromFinhub(symbol: string, period: string): Promise<ChartData[]> {
+    // Since Finnhub free tier doesn't provide historical data easily,
+    // we'll use current quote to create some recent data points
+    const quote = await this.getQuoteFromFinhub(symbol);
+    const days = period === '1d' ? 1 : period === '5d' ? 5 : period === '1mo' ? 30 : 90;
+    const data: ChartData[] = [];
+    
+    for (let i = days; i >= 0; i--) {
+      const date = new Date();
+      date.setDate(date.getDate() - i);
+      
+      // Simulate some price variation around current price
+      const variation = (Math.random() - 0.5) * quote.price * 0.05; // 5% max variation
+      const price = Math.max(quote.price + variation, quote.price * 0.9);
+      
+      data.push({
+        timestamp: date.toISOString().split('T')[0],
+        price: price,
+        volume: Math.floor(Math.random() * quote.volume || 1000000),
+      });
+    }
+    
+    return data;
   }
 
   // Generate mock historical data
@@ -131,37 +223,46 @@ export class StockAPI {
 
   // Get market indices
   static async getMarketIndices(): Promise<{ name: string; value: number; change: number; changePercent: number }[]> {
-    // Return mock market indices data
     try {
-      return [
-        {
-          name: 'KOSPI',
-          value: 2456.78 + (Math.random() - 0.5) * 100,
-          change: (Math.random() - 0.5) * 50,
-          changePercent: (Math.random() - 0.5) * 2
-        },
-        {
-          name: 'KOSDAQ',
-          value: 756.89 + (Math.random() - 0.5) * 50,
-          change: (Math.random() - 0.5) * 20,
-          changePercent: (Math.random() - 0.5) * 2
-        },
-        {
-          name: 'S&P 500',
-          value: 4567.12 + (Math.random() - 0.5) * 200,
-          change: (Math.random() - 0.5) * 100,
-          changePercent: (Math.random() - 0.5) * 1.5
-        },
-        {
-          name: 'NASDAQ',
-          value: 14234.56 + (Math.random() - 0.5) * 500,
-          change: (Math.random() - 0.5) * 200,
-          changePercent: (Math.random() - 0.5) * 1
-        }
+      // Get real market indices data
+      const indices = [
+        { symbol: 'SPY', name: 'S&P 500' },    // S&P 500 ETF
+        { symbol: 'QQQ', name: 'NASDAQ' },     // NASDAQ ETF
+        { symbol: 'DIA', name: 'Dow Jones' },  // Dow Jones ETF
+        { symbol: 'VTI', name: 'Total Market' } // Total market ETF
       ];
+
+      const promises = indices.map(async (index) => {
+        try {
+          const stockData = await this.getQuote(index.symbol);
+          return {
+            name: index.name,
+            value: stockData.price,
+            change: stockData.change,
+            changePercent: stockData.changePercent
+          };
+        } catch (error) {
+          console.error(`Error fetching ${index.name}:`, error);
+          // Return mock data for this index if real data fails
+          return {
+            name: index.name,
+            value: Math.random() * 1000 + 100,
+            change: (Math.random() - 0.5) * 20,
+            changePercent: (Math.random() - 0.5) * 2
+          };
+        }
+      });
+
+      return await Promise.all(promises);
     } catch (error) {
       console.error('Error fetching market indices:', error);
-      throw error;
+      // Return mock data as fallback
+      return [
+        { name: 'S&P 500', value: 4567.12, change: 15.23, changePercent: 0.33 },
+        { name: 'NASDAQ', value: 14234.56, change: -45.23, changePercent: -0.32 },
+        { name: 'Dow Jones', value: 34567.89, change: 125.67, changePercent: 0.36 },
+        { name: 'Total Market', value: 201.45, change: 2.15, changePercent: 1.08 }
+      ];
     }
   }
 
